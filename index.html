@@ -88,6 +88,7 @@ h2 {
     font-size: 27px;
     font-weight: bold;
     color: #38bdf8;
+    overflow-wrap: anywhere;
 }
 
 .unit {
@@ -148,10 +149,67 @@ canvas {
     margin: 12px 0;
     font-size: 13px;
     color: #cbd5e1;
+    overflow-wrap: anywhere;
 }
 
 .device-info span {
     color: #38bdf8;
+}
+
+.login-card {
+    background: #151f30;
+    border: 1px solid #29384d;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 25px;
+}
+
+.login-card h2 {
+    margin-bottom: 12px;
+}
+
+.login-card p {
+    color: #94a3b8;
+    font-size: 13px;
+    line-height: 1.6;
+    margin-bottom: 14px;
+}
+
+.login-card input {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 12px;
+    border: 1px solid #29384d;
+    border-radius: 7px;
+    background: #0b1220;
+    color: white;
+    font-size: 14px;
+}
+
+.login-card button {
+    padding: 11px 18px;
+    border: none;
+    border-radius: 7px;
+    background: #0284c7;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+    margin-right: 8px;
+}
+
+.login-card button:disabled {
+    opacity: 0.6;
+}
+
+#logoutButton {
+    background: #475569;
+    display: none;
+}
+
+#loginMessage {
+    margin-top: 12px;
+    overflow-wrap: anywhere;
 }
 
 footer {
@@ -184,10 +242,38 @@ footer {
     <p>Gas Analysis and Automatic Control System</p>
 
     <div class="connection">
-        <span class="dot"></span>
-        <span id="connection">WAITING FOR DEVICE CONNECTION</span>
+        <span class="dot" id="connectionDot"></span>
+        <span id="connection">WAITING FOR LOGIN</span>
     </div>
 </header>
+
+<section class="login-card">
+    <h2>Firebase Login</h2>
+    <p>Sign in using the email address and password registered in Firebase Authentication.</p>
+
+    <form id="loginForm">
+        <input
+            type="email"
+            id="email"
+            placeholder="Firebase email address"
+            autocomplete="username"
+            required
+        >
+
+        <input
+            type="password"
+            id="password"
+            placeholder="Firebase password"
+            autocomplete="current-password"
+            required
+        >
+
+        <button type="submit" id="loginButton">Login</button>
+        <button type="button" id="logoutButton">Logout</button>
+    </form>
+
+    <p id="loginMessage">Please log in to view device readings.</p>
+</section>
 
 <section class="section">
     <h2>Monitoring Dashboard</h2>
@@ -243,9 +329,9 @@ footer {
     <div class="device-info">
         <p>Controller: <span>Raspberry Pi Pico W</span></p>
         <p>Gas Sensor: <span>MQ-2</span></p>
-        <p>Communication: <span>Wi-Fi / MQTT</span></p>
-        <p>IoT Platform: <span>ThingsBoard</span></p>
-        <p>System Status: <span id="system">Awaiting telemetry</span></p>
+        <p>Communication: <span>Wi-Fi / Firebase</span></p>
+        <p>IoT Platform: <span>Firebase Realtime Database</span></p>
+        <p>System Status: <span id="system">Awaiting login</span></p>
         <p>Last Update: <span id="lastUpdate">No data received</span></p>
     </div>
 </section>
@@ -253,16 +339,319 @@ footer {
 <footer>
     <p>Smart LPG Gas Analysis and Automatic Control System</p>
     <p>Electronic Engineering Project | DUT</p>
-    <p>Raspberry Pi Pico W | MQ-2 | IoT Monitoring</p>
+    <p>Raspberry Pi Pico W | MQ-2 | Firebase</p>
 </footer>
 
 </div>
 
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+
 <script>
+
+// ========================================
+// 1. FIREBASE CONFIGURATION
+// ========================================
+
+const firebaseConfig = {
+    apiKey: "AIzaSyBTuk5Vsw5iTggsU1SJlVwQZss-vTRxfcs",
+    authDomain: "gas-analysis-and-control-4a0ce.firebaseapp.com",
+    databaseURL: "https://gas-analysis-and-control-4a0ce-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "gas-analysis-and-control-4a0ce",
+    storageBucket: "gas-analysis-and-control-4a0ce.firebasestorage.app",
+    messagingSenderId: "333426827355",
+    appId: "1:333426827355:web:e140d8989bca56b6b69f7e",
+    measurementId: "G-8PRKZN8V0Z"
+};
+
+// Start Firebase
+firebase.initializeApp(firebaseConfig);
+
+const auth = firebase.auth();
+const database = firebase.database();
+
+// Pico W telemetry location
+const telemetryPath = "devices/pico-01/telemetry";
+
+
+// ========================================
+// 2. PAGE ELEMENTS
+// ========================================
+
+const loginForm = document.getElementById("loginForm");
+const emailInput = document.getElementById("email");
+const passwordInput = document.getElementById("password");
+const loginButton = document.getElementById("loginButton");
+const logoutButton = document.getElementById("logoutButton");
+const loginMessage = document.getElementById("loginMessage");
+
+const connection = document.getElementById("connection");
+const connectionDot = document.getElementById("connectionDot");
+
+let telemetryListener = null;
+let chartValues = [];
+
+
+// ========================================
+// 3. CONNECTION DISPLAY
+// ========================================
+
+function setConnection(message, color) {
+    connection.textContent = message;
+    connectionDot.style.background = color;
+}
+
+
+// ========================================
+// 4. LOGIN
+// ========================================
+
+loginForm.addEventListener("submit", async function(event) {
+    event.preventDefault();
+
+    loginButton.disabled = true;
+    loginMessage.textContent = "Signing in...";
+
+    try {
+        await auth.signInWithEmailAndPassword(
+            emailInput.value.trim(),
+            passwordInput.value
+        );
+
+        passwordInput.value = "";
+        loginMessage.textContent = "Login successful.";
+
+    } catch (error) {
+        loginMessage.textContent =
+            "Login failed: " + error.message;
+    }
+
+    loginButton.disabled = false;
+});
+
+
+// ========================================
+// 5. LOGOUT
+// ========================================
+
+logoutButton.addEventListener("click", async function() {
+    try {
+        await auth.signOut();
+        loginMessage.textContent = "You have logged out.";
+    } catch (error) {
+        loginMessage.textContent = error.message;
+    }
+});
+
+
+// ========================================
+// 6. FIREBASE AUTHENTICATION STATE
+// ========================================
+
+auth.onAuthStateChanged(function(user) {
+
+    if (telemetryListener) {
+        database.ref(telemetryPath).off(
+            "value",
+            telemetryListener
+        );
+        telemetryListener = null;
+    }
+
+    if (user) {
+        loginForm.style.display = "none";
+        logoutButton.style.display = "inline-block";
+
+        loginMessage.textContent =
+            "Logged in: " + user.email;
+
+        setConnection("CONNECTED TO FIREBASE", "#22c55e");
+
+        document.getElementById("system").textContent =
+            "Signed in; waiting for device data";
+
+        startTelemetry();
+
+    } else {
+        loginForm.style.display = "block";
+        logoutButton.style.display = "none";
+
+        setConnection("WAITING FOR LOGIN", "#fbbf24");
+
+        document.getElementById("system").textContent =
+            "Awaiting login";
+
+        document.getElementById("gas").textContent = "--";
+        document.getElementById("condition").textContent = "WAITING";
+        document.getElementById("fan").textContent = "--";
+        document.getElementById("buzzer").textContent = "--";
+        document.getElementById("lastUpdate").textContent =
+            "No data received";
+
+        chartValues = [];
+        drawChart();
+
+    }
+});
+
+
+// ========================================
+// 7. READ LIVE TELEMETRY FROM FIREBASE
+// ========================================
+
+function startTelemetry() {
+
+    const telemetryRef = database.ref(telemetryPath);
+
+    telemetryListener = function(snapshot) {
+
+        if (!snapshot.exists()) {
+            setConnection("WAITING FOR DEVICE DATA", "#fbbf24");
+
+            document.getElementById("system").textContent =
+                "No telemetry found";
+
+            return;
+        }
+
+        const data = snapshot.val();
+
+        updateDashboard(data);
+
+    };
+
+    telemetryRef.on("value", telemetryListener, function(error) {
+
+        setConnection("DATABASE ERROR", "#ef4444");
+
+        document.getElementById("system").textContent =
+            error.message;
+
+    });
+}
+
+
+// ========================================
+// 8. UPDATE DASHBOARD
+// ========================================
+
+function updateDashboard(data) {
+
+    const gas = Number(data.gas_level);
+
+    if (!Number.isFinite(gas)) {
+        document.getElementById("system").textContent =
+            "Invalid gas reading";
+
+        return;
+    }
+
+    document.getElementById("gas").textContent = gas;
+
+    const condition = String(data.gas_status || "UNKNOWN").toUpperCase();
+
+    const conditionElement = document.getElementById("condition");
+    conditionElement.textContent = condition;
+
+    if (condition === "NORMAL") {
+        conditionElement.style.color = "#22c55e";
+    } else if (condition === "WARNING") {
+        conditionElement.style.color = "#fbbf24";
+    } else if (condition === "DANGER") {
+        conditionElement.style.color = "#ef4444";
+    } else {
+        conditionElement.style.color = "#38bdf8";
+    }
+
+    document.getElementById("fan").textContent =
+        displayState(data.fan_status);
+
+    document.getElementById("buzzer").textContent =
+        displayState(data.buzzer_status);
+
+    chartValues.push(gas);
+
+    if (chartValues.length > 30) {
+        chartValues.shift();
+    }
+
+    drawChart();
+
+    document.getElementById("system").textContent =
+        "Receiving telemetry";
+
+    document.getElementById("lastUpdate").textContent =
+        formatTimestamp(data.timestamp);
+
+    setConnection("DEVICE CONNECTED", "#22c55e");
+
+    document.getElementById("chartInfo").textContent =
+        "Displaying the latest " + chartValues.length +
+        " sensor readings from the Raspberry Pi Pico W.";
+}
+
+
+// ========================================
+// 9. FORMAT FAN AND BUZZER VALUES
+// ========================================
+
+function displayState(value) {
+
+    if (value === true || value === 1 ||
+        String(value).toLowerCase() === "true" ||
+        String(value).toLowerCase() === "on") {
+        return "ON";
+    }
+
+    if (value === false || value === 0 ||
+        String(value).toLowerCase() === "false" ||
+        String(value).toLowerCase() === "off") {
+        return "OFF";
+    }
+
+    return "--";
+}
+
+
+// ========================================
+// 10. FORMAT TIMESTAMP
+// ========================================
+
+function formatTimestamp(value) {
+
+    if (value === undefined || value === null) {
+        return "Timestamp unavailable";
+    }
+
+    let date;
+
+    if (typeof value === "number") {
+        date = new Date(value < 1000000000000
+            ? value * 1000
+            : value);
+    } else {
+        date = new Date(value);
+    }
+
+    if (isNaN(date.getTime())) {
+        return String(value);
+    }
+
+    return date.toLocaleString();
+}
+
+
+// ========================================
+// 11. REAL-TIME GAS GRAPH
+// ========================================
+
 const canvas = document.getElementById("gasChart");
 const ctx = canvas.getContext("2d");
 
 function drawChart() {
+
     const width = canvas.clientWidth;
     const height = 220;
     const ratio = window.devicePixelRatio || 1;
@@ -270,14 +659,14 @@ function drawChart() {
     canvas.width = width * ratio;
     canvas.height = height * ratio;
 
-    ctx.scale(ratio, ratio);
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
     ctx.strokeStyle = "#29384d";
     ctx.lineWidth = 1;
 
     for (let i = 1; i <= 4; i++) {
-        let y = i * 40;
+        const y = i * 40;
 
         ctx.beginPath();
         ctx.moveTo(35, y);
@@ -287,32 +676,47 @@ function drawChart() {
 
     ctx.fillStyle = "#94a3b8";
     ctx.font = "11px Arial";
-    ctx.fillText("Waiting for sensor data...", 40, 25);
+
+    if (chartValues.length === 0) {
+        ctx.fillText("Waiting for sensor data...", 40, 25);
+        return;
+    }
+
+    const maxValue = Math.max(65535, ...chartValues);
+
+    const plotWidth = width - 55;
+    const plotHeight = 160;
+
+    ctx.strokeStyle = "#38bdf8";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    chartValues.forEach(function(value, index) {
+
+        const x = 35 +
+            (index / Math.max(chartValues.length - 1, 1)) *
+            plotWidth;
+
+        const y = 200 - (value / maxValue) * plotHeight;
+
+        if (index === 0) {
+            ctx.moveTo(x, y);
+        } else {
+            ctx.lineTo(x, y);
+        }
+
+    });
+
+    ctx.stroke();
+
+    ctx.fillStyle = "#94a3b8";
+    ctx.fillText("Latest readings", 35, 215);
 }
 
 window.addEventListener("resize", drawChart);
+
 drawChart();
 
-// Actual sensor data will be connected here
-// through ThingsBoard MQTT in the next stage.
-
-function updateDashboard(data) {
-    document.getElementById("gas").textContent = data.gas;
-    document.getElementById("condition").textContent = data.status;
-    document.getElementById("fan").textContent =
-        data.fan ? "ON" : "OFF";
-    document.getElementById("buzzer").textContent =
-        data.buzzer ? "ON" : "OFF";
-
-    document.getElementById("connection").textContent =
-        "DEVICE CONNECTED";
-
-    document.getElementById("system").textContent =
-        "Receiving telemetry";
-
-    document.getElementById("lastUpdate").textContent =
-        new Date().toLocaleString();
-}
 </script>
 
 </body>
